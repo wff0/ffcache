@@ -2,6 +2,7 @@ package ffCache
 
 import (
 	"ffCache/ffcache/consistenthash"
+	pb "ffCache/ffcache/ffcachepb"
 	"fmt"
 	"io"
 	"log"
@@ -9,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -63,8 +66,14 @@ func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	body, err := proto.Marshal(&pb.Response{Value: view.ByteSlice()})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Write(view.ByteSlice())
+	w.Write(body)
 }
 
 func (p *HTTPPool) Set(peers ...string) {
@@ -94,23 +103,49 @@ type httpGetter struct {
 
 var _ PeerGetter = (*httpGetter)(nil)
 
-func (h *httpGetter) Get(group string, key string) ([]byte, error) {
-	u := fmt.Sprintf("%v%v/%v", h.baseURL, url.QueryEscape(group), url.QueryEscape(key))
+func (h *httpGetter) Get(in *pb.Request, out *pb.Response) error {
+	u := fmt.Sprintf("%v%v/%v", h.baseURL, url.QueryEscape(in.GetGroup()), url.QueryEscape(in.GetKey()))
 
 	resp, err := http.Get(u)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server returned: %v", resp.Status)
+		return fmt.Errorf("server returned: %v", resp.Status)
 	}
 
 	bytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("reading response body: %v", err)
+		return fmt.Errorf("reading response body: %v", err)
 	}
 
-	return bytes, nil
+	err = proto.Unmarshal(bytes, out)
+	if err != nil {
+		return fmt.Errorf("unmarshaling response body: %v")
+	}
+
+	return nil
 }
+
+//func (h *httpGetter) Get(group string, key string) ([]byte, error) {
+//	u := fmt.Sprintf("%v%v/%v", h.baseURL, url.QueryEscape(group), url.QueryEscape(key))
+//
+//	resp, err := http.Get(u)
+//	if err != nil {
+//		return nil, err
+//	}
+//	defer resp.Body.Close()
+//
+//	if resp.StatusCode != http.StatusOK {
+//		return nil, fmt.Errorf("server returned: %v", resp.Status)
+//	}
+//
+//	bytes, err := io.ReadAll(resp.Body)
+//	if err != nil {
+//		return nil, fmt.Errorf("reading response body: %v", err)
+//	}
+//
+//	return bytes, nil
+//}
